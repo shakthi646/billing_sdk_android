@@ -1,0 +1,1 @@
+-keep,allowobfuscation,allowshrinking class com.billingsdk.ui.paywall.PaywallViewModel

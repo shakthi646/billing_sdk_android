@@ -1,0 +1,30 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:2:1-14:12
+INJECTED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:2:1-14:12
+	package
+		INJECTED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:2:11-69
+uses-permission#android.permission.ACCESS_NETWORK_STATE
+ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:5:5-79
+	android:name
+		ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:5:22-76
+application
+ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:8:5-13:19
+activity#com.billingsdk.ui.paywall.PaywallActivity
+ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:9:9-12:63
+	android:exported
+		ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:11:13-37
+	android:theme
+		ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:12:13-60
+	android:name
+		ADDED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml:10:13-69
+uses-sdk
+INJECTED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml
+INJECTED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/sathya-6501/MyHome/Workspace/Android/billing-sdk-project/billing-sdk/src/main/AndroidManifest.xml
