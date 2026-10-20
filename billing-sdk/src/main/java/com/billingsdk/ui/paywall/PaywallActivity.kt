@@ -40,6 +40,7 @@ class PaywallActivity : ComponentActivity() {
                     onSelectPlan = vm::selectPlan,
                     onPurchase = { vm.purchase(this@PaywallActivity) },
                     onRestore = vm::restorePurchases,
+                    onRetry = vm::refresh,
                     onConsumeSnackbar = vm::consumeSnackbar,
                     onConsumeFinish = vm::consumeFinish,
                     snackbarHostState = snackbarHostState,

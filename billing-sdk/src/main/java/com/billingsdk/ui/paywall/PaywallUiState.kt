@@ -10,4 +10,10 @@ data class PaywallUiState(
     val purchasing: Boolean = false,
     val snackbar: BillingUserMessage? = null,
     val finish: Boolean = false,
+    /**
+     * Why [plans] is empty, when it is. Held in state rather than shown as a
+     * transient snackbar so the paywall can explain itself instead of rendering
+     * a price list with nothing in it.
+     */
+    val planError: BillingUserMessage? = null,
 )

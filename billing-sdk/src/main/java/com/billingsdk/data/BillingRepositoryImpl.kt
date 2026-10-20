@@ -5,7 +5,9 @@ import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingFlowParams
 import com.android.billingclient.api.ProductDetails
 import com.android.billingclient.api.Purchase
+import com.android.billingclient.api.UnfetchedProduct
 import com.billingsdk.billing.BillingClientManager
+import com.billingsdk.billing.BillingSdkException
 import com.billingsdk.data.mapper.ProductDetailsMapper
 import com.billingsdk.datastore.PremiumCacheStore
 import com.billingsdk.domain.BillingRepository
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -54,6 +57,9 @@ class BillingRepositoryImpl @Inject constructor(
     private val _plans = MutableStateFlow<List<PremiumPlan>>(emptyList())
     override val plans: Flow<List<PremiumPlan>> = _plans.asStateFlow()
 
+    private val _planLoadError = MutableStateFlow<BillingUserMessage?>(null)
+    override val planLoadError: Flow<BillingUserMessage?> = _planLoadError.asStateFlow()
+
     private val _uiEvents = MutableSharedFlow<BillingUiEvent>(
         extraBufferCapacity = 16,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -73,24 +79,106 @@ class BillingRepositoryImpl @Inject constructor(
     override suspend fun refreshEntitlements(): PremiumStatus = syncPremiumFromPlay()
 
     override suspend fun refreshPlans(): List<PremiumPlan> = refreshMutex.withLock {
-        client.startConnection()
-
         val subId = config.subscriptionProductId
         val lifetimeId = config.lifetimeProductId
 
-        val subDetails = runCatching {
-            client.queryProductDetails(listOf(subId), BillingClient.ProductType.SUBS)
-        }.onFailure { BillingLogger.w("Subscription query failed", it) }.getOrDefault(emptyList())
+        if (!client.startConnection()) {
+            BillingLogger.w("refreshPlans aborted: could not connect to Google Play")
+            _planLoadError.value = BillingUserMessage(
+                title = "Can't reach Google Play",
+                detail = "Couldn't connect to the Play Store on this device. Check that the " +
+                    "Play Store is installed, up to date and signed in, then try again.",
+            )
+            return@withLock _plans.value
+        }
 
-        val inAppDetails = runCatching {
+        val subQuery = runCatching {
+            client.queryProductDetails(listOf(subId), BillingClient.ProductType.SUBS)
+        }.onFailure { BillingLogger.w("Subscription query failed for '$subId'", it) }
+
+        val inAppQuery = runCatching {
             client.queryProductDetails(listOf(lifetimeId), BillingClient.ProductType.INAPP)
-        }.onFailure { BillingLogger.w("INAPP query failed", it) }.getOrDefault(emptyList())
+        }.onFailure { BillingLogger.w("INAPP query failed for '$lifetimeId'", it) }
+
+        val subDetails = subQuery.getOrNull()?.details.orEmpty()
+        val inAppDetails = inAppQuery.getOrNull()?.details.orEmpty()
 
         lastProductDetails = subDetails + inAppDetails
         val mapped = mapper.mapAll(subId, lifetimeId, lastProductDetails)
         _plans.value = mapped
+
+        _planLoadError.value = if (mapped.isEmpty()) {
+            diagnoseEmptyCatalog(subId, subQuery, inAppQuery).also {
+                BillingLogger.w("Paywall catalog is empty: ${it.title} — ${it.detail}")
+            }
+        } else {
+            null
+        }
+
         mapped
     }
+
+    /**
+     * Works out why the catalog came back empty, in the order the causes actually occur.
+     *
+     * Play reports a product it will not sell to this caller through
+     * `unfetchedProductList` with `OK` as the overall response code, so an empty
+     * catalog is not an error path — it has to be diagnosed explicitly.
+     */
+    private fun diagnoseEmptyCatalog(
+        subId: String,
+        subQuery: Result<BillingClientManager.ProductQueryResult>,
+        inAppQuery: Result<BillingClientManager.ProductQueryResult>,
+    ): BillingUserMessage {
+        // 1. The subscription query itself failed — Play told us the response code.
+        (subQuery.exceptionOrNull() ?: inAppQuery.exceptionOrNull())?.let { failure ->
+            return when (failure) {
+                is BillingSdkException -> BillingMessageResolver.forResponseCode(
+                    failure.responseCode,
+                    failure.message,
+                )
+
+                else -> BillingMessageResolver.forThrowable(failure)
+            }
+        }
+
+        val subResult = subQuery.getOrNull()
+        val subDetails = subResult?.details?.firstOrNull { it.productId == subId }
+
+        // 2. Play withheld the product and said why.
+        subResult?.unfetched?.firstOrNull { it.productId == subId }?.let { unfetched ->
+            return unavailableProductMessage(subId, unfetched)
+        }
+
+        // 3. The product exists and was returned, but carries no purchasable offer.
+        if (subDetails != null && subDetails.subscriptionOfferDetails.orEmpty().isEmpty()) {
+            return BillingUserMessage(
+                title = "No plans available",
+                detail = "Google Play returned '$subId' with no active base plan. Activate a " +
+                    "base plan for this subscription in the Play Console and make sure it is " +
+                    "available in this country.",
+            )
+        }
+
+        // 4. Play simply does not know this product for this package and signing key.
+        return BillingUserMessage(
+            title = "No plans available",
+            detail = "Google Play returned no products for this app. Usually this means the " +
+                "build isn't the one Play distributes (install it from a Play track rather " +
+                "than sideloading), or '$subId' has no active base plan in the Play Console.",
+        )
+    }
+
+    private fun unavailableProductMessage(
+        productId: String,
+        unfetched: UnfetchedProduct,
+    ): BillingUserMessage = BillingUserMessage(
+        title = "No plans available",
+        detail = "Google Play could not return '$productId' (status ${unfetched.statusCode}). " +
+            "Check that the subscription and at least one base plan are active in the Play " +
+            "Console, that this build is distributed by Play, and that the plan is available " +
+            "in this country.",
+    )
 
     override suspend fun restorePurchases(): PremiumStatus {
         val status = syncPremiumFromPlay()
@@ -105,15 +193,26 @@ class BillingRepositoryImpl @Inject constructor(
     }
 
     override suspend fun syncPremiumFromPlay(): PremiumStatus {
-        client.startConnection()
+        if (!client.startConnection()) {
+            BillingLogger.w("Entitlement sync skipped: could not connect to Google Play")
+            return cache.premiumStatus.first()
+        }
+
         val subs = runCatching { client.queryPurchases(BillingClient.ProductType.SUBS) }
             .onFailure { BillingLogger.w("queryPurchases SUBS failed", it) }
-            .getOrDefault(emptyList())
         val inapps = runCatching { client.queryPurchases(BillingClient.ProductType.INAPP) }
             .onFailure { BillingLogger.w("queryPurchases INAPP failed", it) }
-            .getOrDefault(emptyList())
 
-        val status = buildPremiumStatus(subs + inapps)
+        // A failed query is not evidence that nothing is owned. Writing a
+        // "not premium" snapshot from a partial answer would evict a paying
+        // user's cached entitlement and lock them out of an app that is
+        // supposed to keep working offline, so only a complete answer is cached.
+        if (subs.isFailure || inapps.isFailure) {
+            BillingLogger.w("Entitlement sync incomplete — keeping the cached premium status")
+            return cache.premiumStatus.first()
+        }
+
+        val status = buildPremiumStatus(subs.getOrDefault(emptyList()) + inapps.getOrDefault(emptyList()))
         cache.write(status)
         return status
     }
@@ -135,7 +234,9 @@ class BillingRepositoryImpl @Inject constructor(
                 lastProductDetails.firstOrNull { it.productId == productId }
             }
             ?: run {
-                val msg = BillingUserMessage(
+                // Reuse the catalog diagnosis rather than the generic message: the
+                // refresh above has already worked out exactly why Play has nothing.
+                val msg = _planLoadError.value ?: BillingUserMessage(
                     title = "Offer unavailable",
                     detail = "Could not load product details from Google Play.",
                 )

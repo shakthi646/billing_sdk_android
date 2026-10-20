@@ -44,6 +44,12 @@ class PaywallViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            repository.planLoadError.collect { error ->
+                _state.update { it.copy(planError = error) }
+            }
+        }
+
+        viewModelScope.launch {
             repository.uiEvents.collect { event ->
                 when (event) {
                     is BillingUiEvent.PurchaseCanceled -> {
@@ -83,14 +89,13 @@ class PaywallViewModel @Inject constructor(
 
     fun refresh() {
         viewModelScope.launch {
-            _state.update { it.copy(loading = true, snackbar = null) }
+            _state.update { it.copy(loading = true, snackbar = null, planError = null) }
             runCatching { repository.refreshPlans() }
                 .onFailure { throwable ->
-                    _state.update {
-                        it.copy(
-                            snackbar = BillingMessageResolver.forThrowable(throwable),
-                        )
-                    }
+                    // Keep it on screen: an unreachable catalog is the whole
+                    // content of this screen, not a passing notification.
+                    val message = BillingMessageResolver.forThrowable(throwable)
+                    _state.update { it.copy(planError = message) }
                 }
             _state.update { it.copy(loading = false) }
         }

@@ -12,6 +12,7 @@ import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
+import com.android.billingclient.api.UnfetchedProduct
 import com.billingsdk.utils.BillingLogger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.atomic.AtomicBoolean
@@ -123,10 +124,18 @@ class BillingClientManager @Inject constructor(
                 BillingClient.BillingResponseCode.OK
         }
 
+    /**
+     * Queries Play for [productIds], returning both what came back and what did not.
+     *
+     * Play answers `OK` with an empty list when a product is configured but not
+     * purchasable by this caller, so the response code alone cannot distinguish
+     * "working, nothing to sell" from "misconfigured". [ProductQueryResult.unfetched]
+     * carries Play's per-product status code, which is what actually explains it.
+     */
     suspend fun queryProductDetails(
         productIds: List<String>,
         productType: String,
-    ): List<ProductDetails> =
+    ): ProductQueryResult =
         withContext(Dispatchers.Main) {
             val client = clientRef.get() ?: throw BillingSdkException(-1, "BillingClient not created")
             if (!client.isReady) {
@@ -149,7 +158,15 @@ class BillingClientManager @Inject constructor(
 
                 client.queryProductDetailsAsync(params) { result, queryResult ->
                     if (result.responseCode == BillingClient.BillingResponseCode.OK) {
-                        cont.resume(queryResult.productDetailsList)
+                        val details = queryResult.productDetailsList.orEmpty()
+                        val unfetched = queryResult.unfetchedProductList.orEmpty()
+                        if (unfetched.isNotEmpty()) {
+                            BillingLogger.w(
+                                "queryProductDetails($productType) unfetched=" +
+                                    unfetched.joinToString { "${it.productId}:status=${it.statusCode}" },
+                            )
+                        }
+                        cont.resume(ProductQueryResult(details = details, unfetched = unfetched))
                     } else {
                         cont.resumeWithException(BillingSdkException(result.responseCode, result.debugMessage))
                     }
@@ -209,5 +226,11 @@ class BillingClientManager @Inject constructor(
     data class PurchaseUpdate(
         val billingResult: BillingResult,
         val purchases: List<Purchase>,
+    )
+
+    /** Outcome of one [queryProductDetails] call: what Play returned, and what it withheld. */
+    data class ProductQueryResult(
+        val details: List<ProductDetails>,
+        val unfetched: List<UnfetchedProduct>,
     )
 }

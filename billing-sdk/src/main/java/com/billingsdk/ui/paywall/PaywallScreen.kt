@@ -36,6 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -46,6 +48,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +64,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.billingsdk.model.BillingUserMessage
 import com.billingsdk.model.PaywallCustomization
 import com.billingsdk.model.PlanType
 import com.billingsdk.model.PremiumPlan
@@ -73,6 +77,7 @@ fun PaywallRoute(
     onSelectPlan: (String) -> Unit,
     onPurchase: () -> Unit,
     onRestore: () -> Unit,
+    onRetry: () -> Unit,
     onConsumeSnackbar: () -> Unit,
     onConsumeFinish: () -> Unit,
     snackbarHostState: SnackbarHostState,
@@ -101,6 +106,7 @@ fun PaywallRoute(
             onSelectPlan = onSelectPlan,
             onPurchase = onPurchase,
             onRestore = onRestore,
+            onRetry = onRetry,
             ctaLabel = ctaLabel,
         )
 
@@ -121,6 +127,7 @@ private fun PaywallScreen(
     onSelectPlan: (String) -> Unit,
     onPurchase: () -> Unit,
     onRestore: () -> Unit,
+    onRetry: () -> Unit,
     ctaLabel: String,
 ) {
     val gradient = Brush.verticalGradient(
@@ -160,6 +167,19 @@ private fun PaywallScreen(
                     PremiumHero(customization, onClose)
                 }
 
+                // Above the feature list, not after the (absent) plans: when the
+                // catalog is empty this card is the only actionable thing on the
+                // screen, and at the bottom it sat below the fold behind the CTA bar.
+                if (!state.loading && state.plans.isEmpty()) {
+                    item {
+                        PlansUnavailableCard(
+                            message = state.planError,
+                            customization = customization,
+                            onRetry = onRetry,
+                        )
+                    }
+                }
+
                 item {
                     FeatureChecklist(customization.featureLines)
                 }
@@ -176,6 +196,7 @@ private fun PaywallScreen(
                         onClick = { onSelectPlan(plan.planId) },
                     )
                 }
+
             }
         }
 
@@ -187,6 +208,68 @@ private fun PaywallScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 CircularProgressIndicator(color = customization.accent)
+            }
+        }
+    }
+}
+
+/**
+ * Shown when the catalog resolves to nothing.
+ *
+ * Without this the paywall rendered its hero and feature list above an empty
+ * gap with a dead CTA, which read as a broken screen and told neither the user
+ * nor the developer what had gone wrong.
+ */
+@Composable
+private fun PlansUnavailableCard(
+    message: BillingUserMessage?,
+    customization: PaywallCustomization,
+    onRetry: () -> Unit,
+) {
+    GlassCard {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.ErrorOutline,
+                contentDescription = null,
+                tint = customization.accent,
+                modifier = Modifier.size(28.dp),
+            )
+            Text(
+                text = message?.title ?: "No plans available",
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            message?.detail?.let { detail ->
+                Text(
+                    text = detail,
+                    color = Color.White.copy(alpha = 0.75f),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(onClick = onRetry) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = null,
+                        tint = customization.accent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = "Try again",
+                        color = customization.accent,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
