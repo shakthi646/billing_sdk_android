@@ -1,2 +1,0 @@
-com.billingsdk
-style Theme_BillingSdk_Paywall
