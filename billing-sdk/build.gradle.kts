@@ -17,7 +17,9 @@
 
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
+    // NOTE: org.jetbrains.kotlin.android is intentionally NOT applied here.
+    // The host project uses AGP 9, which ships built-in Kotlin support; applying the
+    // standalone Kotlin Android plugin would fail with a duplicate 'kotlin' extension.
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
@@ -35,7 +37,7 @@ object SdkVersions {
     const val ACTIVITY_COMPOSE = "1.9.1"
     const val COMPOSE_BOM = "2024.08.00"
     const val DATASTORE = "1.1.1"
-    const val HILT = "2.57.1"
+    const val HILT = "2.59.2"
     const val HILT_NAV_COMPOSE = "1.2.0"
 }
 
@@ -62,9 +64,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // jvmTarget is derived from compileOptions by AGP 9's built-in Kotlin; no kotlinOptions block.
     buildFeatures {
         compose = true
     }

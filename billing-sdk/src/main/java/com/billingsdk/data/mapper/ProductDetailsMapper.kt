@@ -36,45 +36,72 @@ class ProductDetailsMapper @Inject constructor() {
         return applyDerivedBadges(combined)
     }
 
+    /**
+     * One row per offer, so a base plan carrying a promotion yields two rows: the
+     * promotional price and the standing base price next to it. The user can then
+     * see what the deal is worth instead of only being shown the discounted figure.
+     *
+     * Rows are ordered so each promotional offer sits directly above the base plan
+     * it discounts.
+     */
     private fun mapSubscriptionProduct(details: ProductDetails): List<PremiumPlan> {
-        val offers = details.subscriptionOfferDetails.orEmpty()
-        return offers.mapNotNull { offer ->
-            val phases = offer.pricingPhases.pricingPhaseList
-            if (phases.isEmpty()) return@mapNotNull null
+        return details.subscriptionOfferDetails.orEmpty()
+            .mapNotNull { mapOffer(details, it) }
+            .groupBy { it.basePlanId }
+            .values
+            .flatMap { rows ->
+                rows.sortedWith(
+                    // Promotions first, cheapest of them leading.
+                    compareBy({ !it.isPromotionalOffer }, { it.checkoutPriceAmountMicros }),
+                )
+            }
+    }
 
-            val trialPhase = phases.firstOrNull { it.priceAmountMicros == 0L }
-            val paidPhases = phases.filter { it.priceAmountMicros > 0L }
-            val recurring = paidPhases.lastOrNull() ?: return@mapNotNull null
+    private fun mapOffer(
+        details: ProductDetails,
+        offer: ProductDetails.SubscriptionOfferDetails,
+    ): PremiumPlan? {
+        val phases = offer.pricingPhases.pricingPhaseList
+        if (phases.isEmpty()) return null
 
-            val iso = recurring.billingPeriod
-            val planType = BillingPeriodUtils.planTypeFromIsoDuration(iso)
-            val formattedPrice = recurring.formattedPrice
-            val priceMicros = recurring.priceAmountMicros
-            val currency = recurring.priceCurrencyCode
+        val trialPhase = phases.firstOrNull { it.priceAmountMicros == 0L }
+        val paidPhases = phases.filter { it.priceAmountMicros > 0L }
 
-            val freeTrial = trialPhase?.let { formatTrialLabel(it) }
-            val offerTag = offer.offerTags.firstOrNull()
+        // Last paid phase = the steady-state price the plan settles at.
+        val recurring = paidPhases.lastOrNull() ?: return null
+        // First paid phase = what Play charges on the next payment. These differ
+        // whenever the offer carries introductory pricing, and showing the
+        // recurring one here is what made the card disagree with the Play sheet.
+        val checkout = paidPhases.first()
 
-            val planId = PlanIds.encode(details.productId, offer.basePlanId, offer.offerToken)
+        val iso = recurring.billingPeriod
+        val planType = BillingPeriodUtils.planTypeFromIsoDuration(iso)
+        val currency = recurring.priceCurrencyCode
 
-            PremiumPlan(
-                planId = planId,
-                productId = details.productId,
-                basePlanId = offer.basePlanId,
-                offerToken = offer.offerToken,
-                formattedPrice = formattedPrice,
-                billingPeriod = iso,
-                freeTrial = freeTrial,
-                offerTag = offerTag,
-                isPopular = false,
-                planType = planType,
-                priceAmountMicros = priceMicros,
-                perMonthFormatted = PriceMath.microsToPerMonthMicros(planType, priceMicros)?.let {
-                    formatMicros(it, currency)
-                },
-                discountPercent = null,
-            )
-        }
+        val planId = PlanIds.encode(details.productId, offer.basePlanId, offer.offerToken)
+
+        return PremiumPlan(
+            planId = planId,
+            productId = details.productId,
+            basePlanId = offer.basePlanId,
+            offerToken = offer.offerToken,
+            formattedPrice = recurring.formattedPrice,
+            billingPeriod = iso,
+            freeTrial = trialPhase?.let { formatTrialLabel(it) },
+            offerTag = offer.offerTags.firstOrNull(),
+            isPopular = false,
+            planType = planType,
+            priceAmountMicros = recurring.priceAmountMicros,
+            perMonthFormatted = PriceMath.microsToPerMonthMicros(planType, recurring.priceAmountMicros)
+                ?.let { formatMicros(it, currency) },
+            discountPercent = null,
+            checkoutFormattedPrice = checkout.formattedPrice,
+            checkoutPriceAmountMicros = checkout.priceAmountMicros,
+            introPhaseLabel = checkout
+                .takeIf { it.priceAmountMicros != recurring.priceAmountMicros }
+                ?.let { formatIntroLabel(it) },
+            offerId = offer.offerId,
+        )
     }
 
     private fun mapLifetimeProduct(details: ProductDetails): PremiumPlan? {
@@ -96,13 +123,23 @@ class ProductDetailsMapper @Inject constructor() {
             priceAmountMicros = offer.priceAmountMicros,
             perMonthFormatted = null,
             discountPercent = null,
+            checkoutFormattedPrice = offer.formattedPrice,
+            checkoutPriceAmountMicros = offer.priceAmountMicros,
+            introPhaseLabel = null,
+            offerId = null,
         )
     }
 
+    /** e.g. "7 days free" — the zero-cost phase at the head of an offer. */
     private fun formatTrialLabel(phase: PricingPhase): String {
-        val cycles = phase.billingCycleCount
-        val period = phase.billingPeriod
-        return if (cycles > 0) "$cycles× $period trial" else "Trial ($period)"
+        val period = BillingPeriodUtils.describeIsoDuration(phase.billingPeriod, phase.billingCycleCount)
+        return period?.let { "$it free" } ?: "Free trial"
+    }
+
+    /** e.g. "for the first 3 months" — the window the introductory price applies to. */
+    private fun formatIntroLabel(phase: PricingPhase): String {
+        val period = BillingPeriodUtils.describeIsoDuration(phase.billingPeriod, phase.billingCycleCount)
+        return period?.let { "for the first $it" } ?: "introductory price"
     }
 
     private fun formatMicros(micros: Long, currencyCode: String): String {
@@ -122,9 +159,20 @@ class ProductDetailsMapper @Inject constructor() {
         }.maxOrNull()
 
         return plans.map { plan ->
-            val discount = baselinePerMonthMicros?.let { base ->
-                val mine = PriceMath.microsToPerMonthMicros(plan.planType, plan.priceAmountMicros) ?: return@let null
-                PriceMath.discountPercentVsBaseline(mine, base)
+            val discount = if (plan.hasIntroOffer) {
+                // For a promotional row the meaningful saving is the introductory
+                // price against what the same plan renews at — not against some
+                // other plan's monthly equivalent.
+                PriceMath.discountPercentVsBaseline(
+                    plan.checkoutPriceAmountMicros,
+                    plan.priceAmountMicros,
+                )
+            } else {
+                baselinePerMonthMicros?.let { base ->
+                    val mine = PriceMath.microsToPerMonthMicros(plan.planType, plan.priceAmountMicros)
+                        ?: return@let null
+                    PriceMath.discountPercentVsBaseline(mine, base)
+                }
             }
             val popularTags = plan.offerTag?.contains("popular", ignoreCase = true) == true
             val popular = plan.planType == PlanType.YEARLY || popularTags

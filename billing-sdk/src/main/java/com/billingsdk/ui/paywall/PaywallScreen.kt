@@ -49,6 +49,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -188,13 +189,44 @@ private fun PaywallScreen(
                     Spacer(Modifier.size(20.dp))
                 }
 
-                itemsIndexed(state.plans, key = { _, p -> p.planId }) { _, plan ->
-                    PlanCard(
-                        plan = plan,
-                        selected = plan.planId == state.selectedPlanId,
-                        customization = customization,
-                        onClick = { onSelectPlan(plan.planId) },
-                    )
+                // Lifetime is a different kind of purchase from a subscription, so
+                // it gets its own labelled block above the recurring plans rather
+                // than sitting in the same run of cards.
+                val lifetimePlans = state.plans.filter { it.planType == PlanType.LIFETIME }
+                val subscriptionPlans = state.plans.filter { it.planType != PlanType.LIFETIME }
+                val showSectionHeaders = lifetimePlans.isNotEmpty() && subscriptionPlans.isNotEmpty()
+
+                if (lifetimePlans.isNotEmpty()) {
+                    if (showSectionHeaders) {
+                        item(key = "header_lifetime") {
+                            SectionHeader("One-time purchase", customization)
+                        }
+                    }
+                    itemsIndexed(lifetimePlans, key = { _, p -> p.planId }) { _, plan ->
+                        PlanCard(
+                            plan = plan,
+                            selected = plan.planId == state.selectedPlanId,
+                            customization = customization,
+                            onClick = { onSelectPlan(plan.planId) },
+                        )
+                    }
+                }
+
+                if (subscriptionPlans.isNotEmpty()) {
+                    if (showSectionHeaders) {
+                        item(key = "header_subscriptions") {
+                            SectionDivider()
+                            SectionHeader("Subscriptions", customization)
+                        }
+                    }
+                    itemsIndexed(subscriptionPlans, key = { _, p -> p.planId }) { _, plan ->
+                        PlanCard(
+                            plan = plan,
+                            selected = plan.planId == state.selectedPlanId,
+                            customization = customization,
+                            onClick = { onSelectPlan(plan.planId) },
+                        )
+                    }
                 }
 
             }
@@ -462,6 +494,25 @@ private fun FeatureChecklist(lines: List<String>) {
 }
 
 @Composable
+private fun SectionHeader(text: String, customization: PaywallCustomization) {
+    Text(
+        text = text.uppercase(),
+        color = customization.accent,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.ExtraBold,
+        modifier = Modifier.padding(bottom = 2.dp),
+    )
+}
+
+@Composable
+private fun SectionDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(bottom = 18.dp),
+        color = Color.White.copy(alpha = 0.14f),
+    )
+}
+
+@Composable
 private fun PlanCard(
     plan: PremiumPlan,
     selected: Boolean,
@@ -509,8 +560,10 @@ private fun PlanCard(
                     )
                 }
 
+                // Must be the checkout price, not the recurring one: this is the
+                // number the Play purchase sheet shows once the CTA is tapped.
                 Text(
-                    text = plan.formattedPrice + plan.planType.priceSuffix(),
+                    text = plan.checkoutFormattedPrice + plan.planType.priceSuffix(),
                     color = Color.White,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Black,
@@ -711,16 +764,37 @@ private fun PlanType.priceSuffix(): String =
     }
 
 private fun planBadgeText(plan: PremiumPlan): String? = when {
-    plan.discountPercent != null -> "${plan.discountPercent}% OFF"
     plan.freeTrial != null -> "FREE TRIAL"
+    // A promotional row sits next to the base plan it discounts, so it has to say
+    // which one it is — otherwise two "Monthly" cards differ only by price.
+    plan.isPromotionalOffer -> plan.discountPercent
+        ?.let { "SAVE $it%" }
+        ?: plan.offerTag?.uppercase()
+        ?: "SPECIAL OFFER"
     plan.planType == PlanType.LIFETIME -> "BEST VALUE"
+    plan.discountPercent != null -> "${plan.discountPercent}% OFF"
     plan.isPopular -> "MOST POPULAR"
     else -> null
 }
 
-private fun planSubtitle(plan: PremiumPlan): String = when (plan.planType) {
-    PlanType.WEEKLY -> "Billed weekly"
-    PlanType.MONTHLY -> "Billed at ${plan.formattedPrice}/mo."
-    PlanType.YEARLY -> plan.perMonthFormatted?.let { "Only $it/mo" } ?: "Billed annually"
-    PlanType.LIFETIME -> "One-time purchase"
+private fun planSubtitle(plan: PremiumPlan): String {
+    // An intro offer's headline price is the introductory one, so the subtitle must
+    // not quote a price at all — naming the recurring amount here would put two
+    // different figures on the same card.
+    if (plan.hasIntroOffer) return plan.planType.billingCadence()
+    plan.freeTrial?.let { return "$it, then ${plan.formattedPrice}${plan.planType.priceSuffix()}" }
+    return when (plan.planType) {
+        PlanType.WEEKLY -> "Billed weekly"
+        PlanType.MONTHLY -> "Billed at ${plan.formattedPrice}/mo."
+        PlanType.YEARLY -> plan.perMonthFormatted?.let { "Only $it/mo" } ?: "Billed annually"
+        PlanType.LIFETIME -> "One-time purchase"
+    }
 }
+
+private fun PlanType.billingCadence(): String =
+    when (this) {
+        PlanType.WEEKLY -> "Billed weekly"
+        PlanType.MONTHLY -> "Billed monthly"
+        PlanType.YEARLY -> "Billed annually"
+        PlanType.LIFETIME -> "One-time purchase"
+    }

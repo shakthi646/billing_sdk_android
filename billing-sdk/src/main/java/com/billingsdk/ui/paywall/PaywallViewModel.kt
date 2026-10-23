@@ -144,11 +144,12 @@ class PaywallViewModel @Inject constructor(
         _state.update { it.copy(finish = false) }
     }
 
+    /** Lifetime leads the list when it exists; subscriptions follow, shortest first. */
     private fun displayRank(type: PlanType): Int = when (type) {
-        PlanType.WEEKLY -> 0
-        PlanType.MONTHLY -> 1
-        PlanType.YEARLY -> 2
-        PlanType.LIFETIME -> 3
+        PlanType.LIFETIME -> 0
+        PlanType.WEEKLY -> 1
+        PlanType.MONTHLY -> 2
+        PlanType.YEARLY -> 3
     }
 
     fun ctaLabel(selected: PremiumPlan?): String {
